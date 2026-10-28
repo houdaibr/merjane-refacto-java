@@ -7,7 +7,8 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: validate
+      # In-memory H2 starts empty and Liquibase is disabled: let Hibernate create the schema
+      ddl-auto: update
     show-sql: true
     properties:
       hibernate.format_sql: true

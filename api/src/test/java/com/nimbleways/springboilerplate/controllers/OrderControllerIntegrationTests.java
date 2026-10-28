@@ -1,10 +1,16 @@
 package com.nimbleways.springboilerplate.controllers;
 
-import com.nimbleways.springboilerplate.entities.Order;
-import com.nimbleways.springboilerplate.entities.Product;
-import com.nimbleways.springboilerplate.repositories.OrderRepository;
-import com.nimbleways.springboilerplate.repositories.ProductRepository;
-import com.nimbleways.springboilerplate.services.implementations.NotificationService;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.time.LocalDate;
+import java.util.HashSet;
+import java.util.List;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -12,68 +18,81 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import static org.junit.Assert.assertEquals;
+import com.nimbleways.springboilerplate.entities.Order;
+import com.nimbleways.springboilerplate.entities.Product;
+import com.nimbleways.springboilerplate.repositories.OrderRepository;
+import com.nimbleways.springboilerplate.repositories.ProductRepository;
+import com.nimbleways.springboilerplate.services.implementations.NotificationService;
+import com.nimbleways.springboilerplate.utils.ProductFactory;
 
-// import com.fasterxml.jackson.databind.ObjectMapper;
-
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-
-import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-
-// Specify the controller class you want to test
-// This indicates to spring boot to only load UsersController into the context
-// Which allows a better performance and needs to do less mocks
 @SpringBootTest
 @AutoConfigureMockMvc
-public class MyControllerIntegrationTests {
-        @Autowired
-        private MockMvc mockMvc;
+class OrderControllerIntegrationTests {
 
-        @MockBean
-        private NotificationService notificationService;
+    private static final LocalDate TODAY = LocalDate.now();
 
-        @Autowired
-        private OrderRepository orderRepository;
+    @Autowired
+    private MockMvc mockMvc;
 
-        @Autowired
-        private ProductRepository productRepository;
+    @MockBean
+    private NotificationService notificationService;
 
-        @Test
-        public void processOrderShouldReturn() throws Exception {
-                List<Product> allProducts = createProducts();
-                Set<Product> orderItems = new HashSet<Product>(allProducts);
-                Order order = createOrder(orderItems);
-                productRepository.saveAll(allProducts);
-                order = orderRepository.save(order);
-                mockMvc.perform(post("/orders/{orderId}/processOrder", order.getId())
-                                .contentType("application/json"))
-                                .andExpect(status().isOk());
-                Order resultOrder = orderRepository.findById(order.getId()).get();
-                assertEquals(resultOrder.getId(), order.getId());
-        }
+    @Autowired
+    private OrderRepository orderRepository;
 
-        private static Order createOrder(Set<Product> products) {
-                Order order = new Order();
-                order.setItems(products);
-                return order;
-        }
+    @Autowired
+    private ProductRepository productRepository;
 
-        private static List<Product> createProducts() {
-                List<Product> products = new ArrayList<>();
-                products.add(new Product(null, 15, 30, "NORMAL", "USB Cable", null, null, null));
-                products.add(new Product(null, 10, 0, "NORMAL", "USB Dongle", null, null, null));
-                products.add(new Product(null, 15, 30, "EXPIRABLE", "Butter", LocalDate.now().plusDays(26), null,
-                                null));
-                products.add(new Product(null, 90, 6, "EXPIRABLE", "Milk", LocalDate.now().minusDays(2), null, null));
-                products.add(new Product(null, 15, 30, "SEASONAL", "Watermelon", null, LocalDate.now().minusDays(2),
-                                LocalDate.now().plusDays(58)));
-                products.add(new Product(null, 15, 30, "SEASONAL", "Grapes", null, LocalDate.now().plusDays(180),
-                                LocalDate.now().plusDays(240)));
-                return products;
-        }
+    @Test
+    void processOrderAppliesTheRulesOfEachProductType() throws Exception {
+        Product usbCable = ProductFactory.normal("USB Cable", 30, 15);
+        Product usbDongle = ProductFactory.normal("USB Dongle", 0, 10);
+        Product butter = ProductFactory.expirable("Butter", 30, 15, TODAY.plusDays(26));
+        Product milk = ProductFactory.expirable("Milk", 6, 90, TODAY.minusDays(2));
+        Product watermelon = ProductFactory.seasonal("Watermelon", 30, 15, TODAY.minusDays(2), TODAY.plusDays(58));
+        Product grapes = ProductFactory.seasonal("Grapes", 30, 15, TODAY.plusDays(180), TODAY.plusDays(240));
+        Product strawberry = ProductFactory.seasonal("Strawberry", 0, 30, TODAY.minusDays(10), TODAY.plusDays(5));
+        Order order = saveOrder(List.of(usbCable, usbDongle, butter, milk, watermelon, grapes, strawberry));
+
+        mockMvc.perform(post("/orders/{orderId}/processOrder", order.getId())
+                        .contentType("application/json"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(order.getId()));
+
+        assertEquals(29, availableOf(usbCable));
+        assertEquals(0, availableOf(usbDongle));
+        verify(notificationService).sendDelayNotification(10, "USB Dongle");
+
+        assertEquals(29, availableOf(butter));
+        assertEquals(0, availableOf(milk));
+        verify(notificationService).sendExpirationNotification("Milk", TODAY.minusDays(2));
+
+        assertEquals(29, availableOf(watermelon));
+        assertEquals(30, availableOf(grapes));
+        verify(notificationService).sendOutOfStockNotification("Grapes");
+        assertEquals(0, availableOf(strawberry));
+        verify(notificationService).sendOutOfStockNotification("Strawberry");
+
+        verify(notificationService, never()).sendOutOfStockNotification("Watermelon");
+        verify(notificationService, never()).sendDelayNotification(15, "USB Cable");
+        verify(notificationService, never()).sendExpirationNotification("Butter", TODAY.plusDays(26));
+    }
+
+    @Test
+    void processOrderReturnsNotFoundForUnknownOrder() throws Exception {
+        mockMvc.perform(post("/orders/{orderId}/processOrder", Long.MAX_VALUE)
+                        .contentType("application/json"))
+                .andExpect(status().isNotFound());
+    }
+
+    private Order saveOrder(List<Product> products) {
+        productRepository.saveAll(products);
+        Order order = new Order();
+        order.setItems(new HashSet<>(products));
+        return orderRepository.save(order);
+    }
+
+    private int availableOf(Product product) {
+        return productRepository.findById(product.getId()).orElseThrow().getAvailable();
+    }
 }
