@@ -6,6 +6,3 @@
   * unitaires: `mvnw test`
   * integration: `mvnw integration-test`
   * tous: `mvnw verify`
-
-### Refactoring
-Voir [REFACTORING.md](REFACTORING.md) pour le détail des changements, des choix de conception et des tests.
